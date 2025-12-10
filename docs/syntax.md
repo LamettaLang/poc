@@ -1,18 +1,43 @@
-Lametta is a C/C++ like language. If something is not documents it's probably because I took it from C/C++ without thinking 🤷
-
 ## Preamble
 
 ### Memory - Fixed and dynamic sized types
 
-To make certain things easier, Lametta differentiates between fixed and dynamic sized types.
+Lametta differentiates between fixed and dynamic sized types.
 
-Dynamic sized types are anything that might require reallocation of memory, like lists and other containers, as well as type ambiguity that would usually be represented through a pointer, like any. Fixed sized types are primitives, arrays and compositions thereof, where the size is always known.
+Fixed sized types are primitives, arrays and compositions thereof, where the size is known at compile time.
+Dynamic sized types are anything that requires runtime allocation of memory, including containers, strings, and any.
 
-This is mostly relevant for reinterpreting memory. There it helps to avoid read/write out of bounds and additionally it helps to avoid reinterpreting any pointers as primitives, by disabling the reinterpretation operation view_as on dynamic sized types.
+This is mostly relevant for reinterpreting memory. There it helps to avoid read/write out of bounds and additionally it
+helps to avoid reinterpreting any pointers as primitives, by disabling the reinterpretation operation view_as on dynamic
+sized types.
+
+### General notes
+
+Comments in Lametta use C-Syntax with // prefix for line comments and /* */ for block comments.
+
+Statements are in general terminated by a line break. If you write an expression, it can implicitly use line continuations
+by ending one line with an operator or starting the next one with an operator. You can however use semicolon as explicit
+statement terminator. Control flow also does not require paranthesis, similar to python, although there is a difference:
+If the following statement, for example of a conditional, is not on the same line, there is usually no need for a colon.
+The colon is also optional if the following statement is a block expression. This separation between a context introducing
+syntax element, like control flow or functions, is denoted in the grammar definition as SEPARATOR.
+
+```
+// examples for separators:
+if condition: single_statement // <-- here SEPARATOR is a colon because the statement is on the same line.
+// or
+if condition // <-- here SEPARATOR is a linebreak, so no colon is needed, although allowed.
+   single_statement
+// or
+if condition { // <-- starting the block expression on the same line would requrie a SEPARATOR, if not for the exception.
+   block_statement
+}
+```
 
 ### Standard Library
 
-A standard library is planned, but not subject of this document.
+A standard library is planned, but not subject of this document. A small set of builtins can be found
+at [Required builtins](#required-builtins)
 
 ### Concurency and Parallelism
 
@@ -24,13 +49,23 @@ Tooling is not subject of this document.
 
 ## Types
 
+Lametta is explicitly types. Every function or variable has to have a defined type. While there are defered types,
+you still need to explicitly defer type with a keyword.
+
+The language does not support defining generics or using custom template.
+The only place where similar syntax is used, is for container types and and method maps.
+
+The syntax used in the following puts tokens in single quotes, parenthesis mean a part is optional,
+elipsis denote repetition and unquoted words are placeholders.
+
 ### Logic type
 
 Booleans. You know them. Typename is bool, value is true of false, numeric for false is 0, what's not false is true.
 
 ### Numeric types
 
-Built in type names should be short and precise. uint8_t is ugly, and unsigned int is very verbose. These primitive types in Lametta have very short names. They are, as expected, fixed sized.
+Built in type names should be short and precise. uint8_t is ugly, and unsigned int is very verbose. These primitive
+types in Lametta have very short names. They are, as expected, fixed sized.
 
 * u8 / i8 = unsigned / signed byte
 * u16 / i16 = unsigned / signed 16-bit integer
@@ -38,107 +73,208 @@ Built in type names should be short and precise. uint8_t is ugly, and unsigned i
 * u64 / i64 = unsigned / signed 64-bit integer
 * u128 / i128 = unsigned / signed 128-bit integer
 * uint / int = unsigned / signed integer
-* f16 = IEEE-754 16-bit binary
 * f32 = IEEE-754 32-bit binary
 * f64 = IEEE-754 64-bit binary
 * f128 = IEEE-754 128-bit binary
 * float = IEEE-754 binary
-* c16/c32/c64/c128 = real+imaginary pair of fN values
+* c32/c64/c128 = real+imaginary pair of fN values
 * complex = real+imaginary pair of float values
 
-Not specifying a width most likely equates to "i dont want to think about this now" and thus uses the widest version (e.g. uint == u128).
+Not specifying a width most likely equates to "i dont want to think about this now" and thus uses the widest version (
+e.g. uint == u128).
 However when this documentation omits widths in an explanation, it means that any sensable width should be supported.
 
 ### Address
 
 The address type is a special numeric type that does not convert to other
-numeric types, while other numeric types can convert to an address for the purpose of arithmetic operations like addition. Addresses have a platform dependend but fixed size. This means that structures can compile with different sizes based on the pointer size of a platform or architecture.
+numeric types, while other numeric types can convert to an address for the purpose of arithmetic operations like
+addition. Addresses have a platform dependend but fixed size. This means that structures can compile with different
+sizes based on the pointer size of a platform or architecture.
 
-The main purpose of the address type is to interface with native libraries and for hardware abstraction (e.g. hardware registers that are mapped at spcific addresses).
+The main purpose of the address type is to interface with native libraries and for hardware abstraction (e.g. hardware
+registers that are mapped at spcific addresses).
+
+An address has to be bound to a different type to dereference it. See `bind<T>()` later.
 
 ### Text types
 
-Strings are utf encoded, exact encoding depending on the storage type. Conversion functions exist to widen and narrow between utf8/utf16/utf32.
-Strings are stored as unsigned integer arrays or vectors of u8, u16 or u32, corresponding to their encoding. There is no grapheme handling at this point, but a method map can handle this defficiency.
+Strings are utf encoded, exact encoding depending on the storage type. Conversion functions exist to widen and narrow
+between utf8/utf16/utf32.
+Strings are stored as unsigned integer arrays or vectors of u8, u16 or u32, corresponding to their encoding. There is no
+grapheme handling at this point, but a method map can handle this defficiency.
 
-While string literals are fixed size, a string variable is dynamic sized. You can cast a string variable to an array if you need to.
+While string literals are fixed size, a string variable is dynamic sized. You can cast string variables to and from
+arrays of utf code units (u8, u16, u32) at any time.
 
-The typename for strings is `str`, and behaves mostly like a method map on a character type array, while still allowing array operations without removing the method map. Note that indexing a string will give you the nth codepoint, and not utf units, as u32.
+The typename for strings is `str`, and is essentially a character type array, that allows array operations on a
+codepoint level. Indexing a string will address the nth codepoint as u32, and not utf units. De-/encoding to the
+strings character representation is handled for you. This automatic encoding is what makes it dynamic sized.
+
+### Enums
+
+Enums are named collections of literal values of the same type. These can be open or closed. For open enums, values that
+are not explicitly listed can still be assigned to enum types, like in C/C++. This can be useful for example for bitflag
+definitions, where combinations of flags are perfectly valid. Closed enums only accept values that are explicitly listed
+with the definition. A classic enumeration like "payment methods", where algorithms can not work with values outside the
+defined range would fit closed enums. Enum values have to be specified in their scoped form (e.g. the banana value of a
+fruits enum would be written as `fruits.banana`). All enum values have to be fixed sized.
+
+An enum can implicitly view_as value type and value types can explicitly view_as enum types. This allows for greater
+compatibility with functions that don't take the enum type as parameter. To check whether a value type would be a valid
+enum value, `value is enum`-Syntax can be used. Converting to and from the enum value to it's identifier as string can
+be done using a string cast (`cast<str>(enum.value)`).
 
 ### Any / Auto
 
-Any is a special type that stores, well, any type. This requires runtime type information (RTTI).
-Auto is a compile time deduced type, that can not change after asigning.
+`any` is a special type that stores, well, any type. This requires runtime type information (RTTI).
+`auto` is not really a type, but a keyword that is a shorthand for type deduction. That means writing `auto` instructs
+the compiler to figure figure out a type based on the context. An auto deduced type can not change afterwards, unlike any.
 
-While any is always dynamic sized, the sized-ness of an auto variable depends on the defered type.
+While `any` is always dynamic sized, the sized-ness of an `auto` variable depends on the defered type.
 
-### Optional / Expect
+### Optional
 
-Optionals are written as `T?` and expects are written as `T!`.
+Optionals are written as `T?`.
 
 Optionals can have a value of type T or be none. This means that `T? == none` is only true if there is no value present.
-The prefered way of checking whether an optional has a value is to let it coerce to a boolean (`if t`), but if you have a bool?, you need to check manually.
+The prefered way of checking whether an optional has a value is to let it coerce to a boolean (`if t`), but if you have
+a bool?, you need to check manually.
 
-Expect on the other hand either holds a value T or an error. It will coerce to true if it has a value and false if it stores an error.
-To check for a value explicitly, you have to cast it to an optional, as this cast is guaranteed to not crash (e.g. `cast<bool?>(expectBool) == none`).
+Retrieving a value can be done explicitly or implicitly by casting it to the non-optional type.
+If no value is present, this will crash unless you cast to an expect `T!`. An empty optional will result in an error
+when casting to an expect.
 
-An error can be assigned to an expect though `fail` (e.g. `int! value = fail('No value set')`). To retrieve the message of a failed value, you can simply cast it to a string.
+In some cases you might want to default the optional to a usable value. While you can do that using normal control flow,
+you can use the short hand `or`, that takes a `T?` or `T?` left and a `T` right.
 
-Retrieving a value can be done explicitly or implicitly by casting it to the non-optional/non-expect type.
-If no value is present, this will crash unless you cast between expect and optional. An empty optional will `fail()` when casting to an expect, and a failed expect will turn `none` if cast to an optional.
+```rust
+Type? optional = ...
+// explicit
+Type value = { if !optional: fallback; else: optional; }
+// short hand:
+Type value = optional or fallback
+```
 
-As might be obvious, there are no error types, as the idea of failing is, that the application is in an unrecoverable state. This also means that there are no error classes. Handling a failed value is intended to allow for resource management before failing further up the call chain until the application exits. It ultimately comes down to preference whether you use optional and dont provide a message, or expect and give a reason. E.g. a div by 0 or failing to open a file should be checked beforehand and thus might fail(), while getting a value from a map of an unset key might prefer an optional.
+Optionals are fixed sized if their value type is fixed sized, but not neccessarily the same size.
 
-For truly unrecoverable errors, you can use the `crash()` built in, that will terminate the application with an optional message, without returning.
+### Errors and Expect
 
-Since optionals are fixed sized if their value type is fixed sized; expect values are always dynamic sized.
+#### Errors
+
+Errors are represented though method maps similar to the class hirarchy of exceptions in other languages. An error
+consists of at least error class and an error message. The base method map needs to be inherited from `Error`, as in
+`MyErrorType is Error`.
+
+`Error` is a method map that looks like this:
+
+```rust
+def Error as methodmap {
+  protected fun new(const str? message) {/*...*/}
+  /** @brief returns the given message or a fallback */
+  export fun message()->(str message) {/*...*/}
+  /** @brief spews stacktrace to stdout */
+  export fun stacktrace() {/*...*/}
+  /** @brief set context information */
+  protected fun putContext(const str name, any value)
+  /** @brief retrieve context information
+   * To be wrapped by derived methodmaps to make available context visible
+   */
+  protected fun context(const str name)->(const any? value)
+}
+
+// example
+def FileError as methodmap < Error {
+  public fun new(const str file) {
+    this = view_as<FileError>(fail("File Error: " + file))
+    putContext("file", file)
+  }
+  export fun file()->(const str file):
+    file = context("file")
+}
+```
+
+#### Expect
+
+Expects are written as `T!`.
+
+Expect holds a value T or an error. It behaves identical to `variant<T, Error>`, but is easier to type. As union type,
+use a type check to test for success.
+
+To fail an expect, assign an error (e.g. `int! value = ValueError('No value given')`, see binding types). To check
+for a value explicitly, type check it with is/as or cast it to an optional (e.g. `expectBool is bool`,
+`cast<bool?>(expectBool)` or `cast<Error?>(expectBool)`).
+
+Retrieving a value or error can be done explicitly or implicitly by casting it to the corresponding type.
+If the cast fails the application will crash, unless you cast to an optional.
+In that case a failed expect will turn `none` if cast to an optional value type.
+
+Expects are fixed sized if their value type is fixed sized, but not neccessarily the same size.
 
 ### Handles
 
-Handle types are opaque values that are used internally to map to object instances. These are intended to hide memory for libraries.
-You can not perform arithmetic operations on handles and the byte size is not guaranteed, but fixed (Meaning it will be consistent for the platform you compile on and not turn your structs into dynamic sized objects).
+Handle types are opaque values that are used internally to map to object instances. These are intended to hide memory
+for libraries.
+You can not perform arithmetic operations on handles and the byte size is not guaranteed, but fixed (Meaning it will be
+consistent for the platform you compile on and not turn your structs into dynamic sized objects).
 
-Handles are ref counted, with every value copy. The ref count will go down for every Handle going out of scope, and the resource will be freed once all Handles to it are closed or their ref count reaches zero. A handle can also be deleted, invalidating it for every user. It is discouraged to delete handles manually, but might be required for edgecases. To prevent crashes from accessing invalid handle, you can use the built in `isValid(ref Handle hdl)->(bool valid)`.
-
-Handles can also be copied, in cases where you want to completely hand off responsibility to a different part of the application. For this, you can use the built in `cloneHandle(ref Handle hdl)->(move Handle clone)`.
+Handles are ref counted, with every value copy. The ref count will go down for every Handle going out of scope, and the
+resource will be freed once all Handles to it are closed or their ref count reaches zero. A handle can also be deleted,
+invalidating it for every user. It is discouraged to delete handles manually, but might be required for edgecases. To
+prevent crashes from accessing invalid handle, you can use the built in `isValid(ref Handle hdl)->(bool valid)`.
 
 ### Containers
 
 Containers are default data structures for your convenience. Contained types are denoted in triangle brackets.
 Containers are always dynamic sized and can not be used with `view_as`.
 Sets, lists and vectors can be cast back and forth to arrays if needed. Performing such a cast will copy all elements.
-Sets, lists, vectors, dicts and tuples  have a length and are iterable. With exception to sets they can be subscripted using `var[key]`.
-Declarations for containers support omitting the element types, in which case the element type will be defered as auto, or be any. If you are not surewhat type a value has, you can use `is` or `as` to test.
+Sets, lists, vectors, dicts and tuples have a length and are iterable. With exception to sets they can be subscripted
+using `var[key]`.
+Element types of containers can be omitted, in which case the element type will be defered by the compiler.
+If you are not sure what type a value or element has, you can use `is` or `as` to test.
 
 * set\<T>
 * list\<T> (linked list)
-* vec\<T> (array list)
+* vec\<T> (dynamic array)
 * dict\<K,V> (unordered hash map with K keys and V values)
 * variant\<...> (holds one of the specified types)
 * tuple\<...> (holds a fixed series of values of specified types, indexable like an array)
 
 ### Arrays
 
-Arrays are collections of fixed amount of values. Arrays are fixed sized if the element type is fixed and dynamic sized if the element type is dynamic. If left uninitialized, best effort is taken to zero out memory.
+Arrays are collections of fixed amount of values. Arrays are fixed sized if the element type is fixed and dynamic sized
+if the element type is dynamic. Arrays are zero-initialized by default. The type of an array of type `T` with size
+`size` would be written as `T[size]`, where size has to be a known integer at compile time.
 
 ### Structs
 
-You know what a struct is. Structs are always packed always in system byte order. There is no padding. Structures exist as fixed size and dynamic size.
-If a structure contains a container or any other dynamic sized element, it is marked dynamic itself. Memory reinterpretation with view_as\<R> is disabled for dynamic structures, because they contain indirections; you have to use cast\<R> instead.
+You know what a struct is. Structs are always packed always in system byte order. There is no padding. Structures exist
+as fixed size and dynamic size.
+If a structure contains a container or any other dynamic sized element, it is marked dynamic itself. Memory
+reinterpretation with `view_as<R>` is disabled for dynamic structures, because they contain indirections; you have to
+use `cast<R>` instead.
 
-The type is declared with `struct {}` where members are declared within the curly braces. To give the struct type a name, create a type alias.
+The type is declared with `struct {}` where members are declared within the curly braces. To give the struct type a
+name, create a type alias.
 Members are declared without initializers, and default to 0-bytes. C-like bitfield widths are not supported.
+
+### Variant
+
+Variant is a type union, the value can only have one of the specified types. Most useful if named, to limit the accepted
+types of an argument ahead, making exhaustive pattern matching easier, by removing the need for a default case with any.
 
 ### Tuples
 
-Tuples are similar to structs in that they hold a list of values of potentially different type. The main difference to structs is, that values in tuples are not refered to by name, but by index instead.
+Tuples are similar to structs in that they hold a list of values of potentially different type. The main difference to
+structs is, that values in tuples are not refered to by name, but by index instead.
 
-While tuples follow the same layout rules as structs, inheriting fixed size proertied from it's element types, it behaves like a sequence container otherwise, having a length and being subscriptable.
+While tuples follow the same layout rules as structs, inheriting fixed size proertied from it's element types, it
+behaves like a sequence container otherwise, having a length and being subscriptable.
 
 ### (Method maps)
 
-Method maps are a reference type wrapper to a base value that provide convenient methods where the referenced value is accessible as this.
-You can imagine similar to a `template<class T> class interface {}` where member functions take an explicit `T& self` first argument.
+Method maps are a reference type wrapper to a base value that provide convenient methods where the referenced value
+is accessible as this. You can imagine it as a `template<class T> class interface {}` where member functions take an
+explicit `T& self` first argument.
 See the method map section for more information. Operators in Lametta can not be overloaded.
 
 ## Operators
@@ -155,6 +291,8 @@ See the method map section for more information. Operators in Lametta can not be
 
 `! && || == != < > <= >=`
 
+You can chain the `<` and `<=` operators as a shortcut to denote range checks. `l <= x < h` is equal to `(l <= x) && (x < h)`.
+
 ### String operators
 
 `+` - Concatenate, implicitly casts to string
@@ -165,39 +303,71 @@ See the method map section for more information. Operators in Lametta can not be
 
 `=` - Assignment
 
-The assignment operator can destruct a tuple of a signle value into the value itself for convenience, if the left hand is not auto or any, and the right hand is a tuple with a compatible element type.
+The assignment operator can destruct tuples, if they contain a single value, for convenience, if the left hand of the
+assignment is not auto or any typed, and the right hand has a compatible element type. It can also box/unbox
+optionals and expect values. The left and right hand type have to be a pair of `T`, `T?` and `T!`.
+If an empty optional or failed expect is unboxed into a literal T, the assignment crashes.
+
+Similarly assignments can be made from and to variants as long as the variant supports the value type.
+
+An assignment operator can also move data between vectors, lists and arrays, giving important utility when converting
+between the two. Assigning to an array requires, that the vector/list has the same length as the array. In all other
+case the vector/list will be resized accordingly.
 
 `.` - Member Access
 
-Access an element in a namespace, struct or methodmap.
+Access an element in a namespace, struct, methodmap or enum.
 
 `#` - Length
 
-This is a unary prefix operator that counts the elements of a container or the length of an array.
+This is a unary prefix operator that counts the elements of a container or the length of an array or string.
 
 ### Index and Range
 
 `'[' INDEX ']'` - Single index access
-`'[' START ':' END ']'` - Range access
-`'[' START ':' END ':' STEP ']'` - Range access with step
+`'[' START ':' END ( ']' | '[' )` - Range access
+`'[' START ':' STEP ':' END ( ']' | '[' )` - Range access with step
 
-This has three variants. The one you are probably most familiar with, using a single index for the range, getting
-a ref to the element at the specified index. Using two numeric values, separated by a colon, you specify a
-[ start, end ) rangeof indices to extract. Adding a third numeric value after another colon, specifies the stride
-taking every nth element after (including) the start element.
+Variant 1:
+Returns a reference to the element at the specified index.
+Variant 2:
+Using two numeric values, separated by a colon. This specifies a range of values from START to END. Use a ']' to
+terminate the range for end inclusive, or '[' to make it end exclusive.
+Variant 3:
+Adding a third numeric value after another colon adds a stride, taking every nth element after (including) the start
+element.
+
+Step defaults to 1 for variant 2. Use variant 3 if end < start.
+As a range, these act as generators you can iterate over. If used for indexing, the result is a copy-on-write view
+of the container. You can also index start or end with a negative value, where it wraps around the length of the
+iterable.
+
+```rust
+//examples:
+[ 1 : 10 ]
+[ 1 : 2 : #string [
+[ #string-1 : -1 : 0 ]
+string[ -5 : -1 ] == string[ #string-5 : #string [
+```
 
 ### Streaming
 
-`ITERABLE '::' '(' MEM_MOD NAME ')' EXPRESSION` - ForEach
+These operators all have the same precedence and are evaluated left to right. The streaming operators are only
+applicable to iterable collections and arrays.
 
-For each operator, applying each element in a container to the expression with the specified type. Doubles as element wise transformation.
+`ITERABLE '::' TRANSFORMER` - ForEach
+
+For each operator, applying each element in a container to the expression with the specified type. Doubles as element
+wise transformation.
+The transformer has to be a function that takes one value, an element of the iterable, and returns up to one value.
 This results in a new iterable, with equal length, containing the expression results in the same order.
-If the expression is a function call that does not return, the result is an empty collection.
-For modifiers, see [Arguments](#Arguments).
+If the function has zero return values, the result is an empty collection.
 
-`ITERABLE '::?' '(' MEM_MOD NAME ')' EXPRESSION` - Filter
+`ITERABLE '::?' FILTER` - Filter
 
 Filters the elements in the iterable, retaining only elements for which the expression returns a truthy value.
+The filter has to be a function that takes one value, an element of the iterable, and returns a boolean.
+If the filter returns true for an element, it is kept for the resulting collection.
 The result is a new iterable of potentially less elements.
 
 `ITERABLE ::_` - Flatten
@@ -210,161 +380,321 @@ This results in another interable, if an element is a map, it's spread into a ve
 
 The grouping operator performs the inverse of a flat, making a vector of vectors of size specified by the expression.
 If the amount of elements is not divisible by the number, the last element is a vector of inputSize modulo amount.
+The expression can not be a callable, and has to evaluate to a positive, non-zero integer.
 This returns a nested iterable.
 
 ### Pipe
 
 `INPUT '|>' TARGET` - Pipe
 
-Pipes the evaluated left hand side as arguments to the right hand side. If the right hand is a callable, left hand is tried to
+Pipes the evaluated left hand side as arguments to the right hand side. If the right hand is a callable, left hand is
+tried to
 be passed as arguments; otherwise an assignment is tried. Right hand has to be a function or variable.
 The resulting value of this expression is the return value of the called function or the variable as ref.
+If the input is a tuple, from a variable or as result of a function call, the tuple is automatically destructed into
+input arguments of a target function on the right, if every element in order has a matching type in the same position
+of the input argument list. If the destruction does not match the argument list, passing the tuple as single argument
+is tried instead, the function has to take a single tuple argument of matching type in the later case.
 
-### Block statements
+### Block expression
 
 `'{' STATEMENT... '}'` - Statement group
 
 I heard you like statements, so we put statements in your statement to make a bigger statement.
-If not used for a fuction body, upon leaving, this takes on
-the value of the last statement executed inside.
+Of course you can use blocks as function bodies or control flow structures like you're used to.
+However, you can also use blocks as expressions. While a block expression still has the variable context of the parent,
+and can access members as usual, it will also evaluate to the last statement evaluated inside the block before returning.
+
+```rust
+// examples for blocks as expression:
+
+bool hitchhiking = true
+i32 bestNumber = {
+  if hitchhiking {
+    42
+    return // leaving here will evaluate the block to 42
+  }
+  69
+}
+
+bool even = with {
+  floor(rng()*100)
+} as roll:
+match roll % 2 {
+  notifyPlayer()
+  true
+}
+match *: false
+```
 
 ## Declarations
 
-Lametta is type left. Type declarations can never share the same name, variables can be over-shadowed with function context.
+Lametta is type left. Type declarations can never share the same name, variables can be over-shadowed with function
+context. All variables have to be explicitly declared with a type.
+
+```rust
+// examples:
+i32 number
+auto function = fun(i32 v): (v*v,)
+any result = [number] :: function
+```
 
 ### Attributes
 
-Attributes are compiler specific additional pieces of information you can prepend to a declaration, and are formatted as follows:
+Attributes are compiler-specific metadata prepended to declarations, and are formatted as follows:
 
 `'@' NAME ( '(' ( VALUE ) ')' )`
 
-The name for the attribute have to be `\p{L}[\p{L}_]*`, the brackets and value are optional. The content within value is arbitrary and defined by the compiler.
-In order for a compiler to be able to ignore unsupported attributes, the value still has to be parsed with basic book keeping of parens and quotes to know when the value terminates (e.g. `@weirdValue( a(")") )` should parse with key `weirdValue` and value `a(")")`). This includes backslash escapes `\"` and `\\`, ignoring any other backslash escape.
+The name for the attribute have to be `\p{L}[\p{L}_]*`, the brackets and value are optional. The content within value is
+arbitrary and defined by the compiler.
+In order for a compiler to be able to ignore unsupported attributes, the value still has to be parsed with basic book
+keeping of parens and quotes to know when the value terminates (e.g. `@weirdValue( a(")") )` should parse with key
+`weirdValue` and value `a(")")`). This includes backslash escapes `\"` and `\\`, ignoring any other backslash escape.
 If an attribute is nor supported it is to be ignored silently.
 
 There can be any amount of attributes, separated by space.
+
+The few attributes required to be supported are `@build` for project, `@version` and `@source` for dependencies, and
+`@cast` for functions.
 
 ### Values
 
 For basic types, declarations look like this:
 
-`TYPE NAME ('=' INITIAL_VALUE)`
+`TYPE NAME ( '=' INITIAL_VALUE )`
 
-Names starts with any `\p{L}` character and continues with `[^\s]`.
+Names start with any `\p{L}` character and continues with `[^\s]`.
 
 Initializers are optional, if no initializer is specified, the memory is zero-initialized.
 
+#### Enums
+
+Definition of enum values as part of the type:
+
+`'enum' '<' T '>' ( 'open' ) '{' VALUES '}'`
+
+Decalres a namespace for enum literal values of type T.
+
+Numeric values are implicitly initialized start at 0 and increment by one for each value in definiton order. If at least
+one value is explicitly initialized, or the value type is not numeric, all values have to be explicitly initialized.
+
+To give the enum namespace a usable alias, type aliasing has to be used. Otherwise compilation will fail for dangling
+enum values.
+
+Enums are closed by default, meaning only values defined at compile time are valid for the enum. All other value will
+fail compilation. Open enums can accept any new value of type T at runtime, for example for bit flags. Use `open` to
+declare an enum as open.
+
 #### Arrays
 
-`T '[' SIZE ']'`
+Inline definition of an array instance with size derived from the amount of values:
 
-An array of SIZE elements of type T. Arrays of arrays are possible. If initialized, the Initializer has to have no more than SIZE elements, the last element of the initializer is repeated to fill the remaining elements. If no initializer value is given, the elements are initialized to zero, or empty containers.
+`'[' VALUE ( ',' VALUE ... ) ( ',' ) ']'`
+
+An array of SIZE elements of type T. Arrays of arrays are possible. If initialized, the Initializer has to have no more
+than SIZE elements, the last element of the initializer is repeated to fill the remaining elements. If no initializer
+value is given, the elements are initialized to zero, or empty containers.
+
 
 #### Vectors
 
-`'vec' '<' T '>' '{' (VALUE (',' VALUE ...)) '}'`
-`'vec' '{' VALUE (',' VALUE ...) '}'`
+Inline definition of a vector instance of values of type T:
 
-No type has to be specified if at least one element is given. In this case the element type is equal to the type of the first element.
+`'vec' '<' T '>' '{' ( VALUE ( ',' VALUE ... ) ) '}'` or
+`'vec' '{' VALUE ( ',' VALUE ... ) '}'`
+
+No type has to be specified if at least one element is given. In this case the element type is equal to the type of the
+first element.
 All values have to be implicitly convertible to the element type.
 
 #### List
 
-`'list' '<' T '>'{' (VALUE (',' VALUE ...)) '}'`
-`'list' '{' VALUE (',' VALUE ...) '}'`
+Inline definition of a list instance of values of type T:
 
-No type has to be specified if at least one element is given. In this case the element type is equal to the type of the first element.
+`'list' '<' T '>'{' ( VALUE ( ',' VALUE ... ) ) '}'` or
+`'list' '{' VALUE ( ',' VALUE ... ) '}'`
+
+No type has to be specified if at least one element is given. In this case the element type is equal to the type of the
+first element.
 All values have to be implicitly convertible to the element type.
 
 #### Set
 
-`'set' '<' T '>' '{' (VALUE (',' VALUE ...)) '}'`
-`'set' '{' VALUE (',' VALUE ...) '}'`
+Inline definition of a set instance of values of type T:
 
-No type has to be specified if at least one element is given. In this case the element type is equal to the type of the first element.
+`'set' '<' T '>' '{' ( VALUE ( ',' VALUE ... ) ) '}'` or
+`'set' '{' VALUE ( ',' VALUE ... ) '}'`
+
+No type has to be specified if at least one element is given. In this case the element type is equal to the type of the
+first element.
 All values have to be implicitly convertible to the element type.
 
 #### Dict
 
-`'dict' '<' K ',' V '>' '{' (KEY '=' VALUE (',' KEY '=' VALUE ...)) '}'`
-`'dict' '{' KEY '=' VALUE (',' KEY '=' VALUE ...) '}'`
+Inline definition of a dictionary instance of pairs of key type K and value type V:
 
-No type has to be specified if at least one entry is given. In this case the key and value types are equal to the types of the first entry.
+`'dict' '<' K ',' V '>' '{' ( KEY '=' VALUE ( ',' KEY '=' VALUE ... ) ) '}'` or
+`'dict' '{' KEY '=' VALUE ( ',' KEY '=' VALUE ... ) '}'` or
+`'{' KEY '=' VALUE ( ',' KEY '=' VALUE ... ) ( ',' ) '}'`
+
+No type has to be specified if at least one entry is given. In this case the key and value types are equal to the types
+of the first entry.
 All entries have to be implicitly convertible to the entrie's key and value type.
 
 #### Struct
 
-`STUCTTYPE '{' (KEY '=' VALUE (',' KEY '=' VALUE ...)) '}'`
+Inline definition of a struct instance with members KEY and their initializing values.
+
+`STUCTTYPE '{' ( KEY '=' VALUE ( ',' KEY '=' VALUE ... ) ) '}'`
 
 Structs are initialized similarly to dicts, every member of the struct has to be present in the initializer.
 STRUCTTYPE needs to be an alias definition (Constructs like `struct{int a}{a=1}` are _not_ valid).
 
 #### Tuples
 
-`'tuple' '<' (T (',' T ...)) '>' '{' VALUE (',' VALUE ...) }`
-`'tuple' '{' VALUE (',' VALUE ...) }`
+Inline definition of a tuple instance of values of types T1, T2, ...:
+
+`'tuple' '<' ( T1 ( ',' T2 ... ) ) '>' '{' VALUE1 ( ',' VALUE2 ... ) }` or
+`'tuple' '{' VALUE1 ( ',' VALUE2 ... ) }` or
+`'(' VALUE1 ( ',' VALUE2 ... ) ( ',' ) ')'`
 
 Tuples are a series of value whose types have to follow the series of types T in the given order.
 The amount of values has to match the amount of types, and empty tuples are possible.
 If no value types are not specified, they are defered from the value types.
+The third form, using round paranthesis requires a trailing comma, if the tuple has just one element to
+avoid confusion with grouping syntax.
 
 Tuples are the only containers that can be spread into function arguments as well, using elipsis.
-The amount and type of values in the tuple have to match the amount and type of input arguments of the function it is spread into.
+The amount and type of values in the tuple have to match the amount and type of input arguments of the function it is
+spread into.
 Alternatively you can pipe a tuple into a function.
 
 ### Functions
 
 Functions are declared like this:
 
-`'fun' ( NAME ) '(' INARGS ')' ( '->' '(' OUTARGS ')' ) BODY`
+`'fun' ( NAME ) '(' INARGS ')' ( '->' '(' OUTARGS ')' ) SEPARATOR BODY` - regular
+`'fun' '(' INARGS ')' ':' TUPLE` - lambda
 
-Functions can only access INARGS and return OUTARGS. OUTARGS with the surrounding syntax are optional, if there are no out args. Functions are anonymous, if NAME is omitted. If the body is a single statement, it does not need curlies (see statements).
-
-If named with a `def` statement, body and name can not be used as in the statement above. This creats a function type, usefull for example for callback parameters. While you can get the type of a named function, you can not reassign a named function.
-
-For assigning or passing functions, the function type has to be named with a type alias, and can then be assigned to a named or anonymous function like `FUNC_TYPE VAR_NAME '=' ( FUNC_NAME | ANONYMOUS_FUNCTION )`. Anonymous function act as expressions and can also be written inline as function arguments, if desired.
-
-The result of a function call is always tuple of all output arguments. The assignment operator can destruct a tuple of a signle value into the value itself for convenience.
+Functions access only INARGS and must assign all OUTARGS before exiting. Specifying OUTARGS is optional, if there are no
+values returned by the function. Functions are anonymous, if NAME is omitted.
 
 Function overloading is not supported, and have to have distinct names.
 
+If named with a `def` statement, body nor name can not be used as in the statement above. This creats a function type,
+usefull for example for callback parameters. While you can get the type of a named function, you can not reassign a
+named function.
+
+For assigning or passing functions, the function type has to be named with a type alias, and can then be assigned to a
+named or anonymous function like `FUNC_TYPE VAR_NAME '=' ( FUNC_NAME | ANONYMOUS_FUNCTION )`. Anonymous function act as
+expressions and can also be written inline as function arguments, if desired.
+
+The result of a function call is a tuple of all output arguments in order. For a function to be valid, it has to
+explicitly assign every element in the output arguments list with a value.
+
+The second syntax is lambda syntax.
+Lambdas omit the explicit output argument list and require the colon as separator instead. Calling a lambda will resolve
+to the tuple following the separator as written, with elements evaluated within the context of the input arguments.
+A single expression is permitted in this case for brevity, being automatically boxed into a tuple. This means if you want
+to actually return a tuple you have to double it up like so: `fun (): tuple{tuple{42}}`.
+Lambda functions are always anonymous and can not have names.
+
+```rust
+// function without results
+fun sendMessage(str message): /* some implementation */
+// function with result
+fun square(int value)->(int squared, bool even) {
+  squared = value * value
+  even = value % 2 == 0
+}
+// can be written as
+auto square = fun(int value): ( value * value, value % 2 == 0 )
+```
+
 #### Arguments
 
-An argument consists of `( MEM_MOD ) TYPE NAME`
-Memory modifiers can be one of copy, ref, const, move. These should be pretty self explanatory, move is to change ownership between caller and callee, default is copy. Important to not might be, that a move in argument pulls the memory ownership into the function, making it inaccessible for the caller. If the caller tries to access such a variable after it has been moved away, the application will crash. Moving memory out differs little to copy out, as the move happens at the return point.
-If an argument by name appreas in the input and output list, it has to have the same type and the memory modifier has to be copy or reference.
-Passing a method map by value will create a hidden value type copy, that is then newly referenced by the method map type, passing a method map by value will avoid this.
-Optional arguments have to be at the end of the input argument list and will be `none` if omitted.
-Placing an elipsis after the last input argument creates a vararg function, collecting all remaining arguments given to the function into a tuple of values of the specified type. E.g. in a function `fun x(copy any values ...)` values are accessibla as if declared with `tuple<any,...> value` where the amount of type parameters for the tuple equals the amount of values passed.
-Optionals and varargs can not be mixed.
+An argument consists of `( MEM_MOD ) TYPE NAME`. This applies to input and output arguments.
+Memory modifiers can be one of copy, ref, const, move. These should be pretty self explanatory, move is to change
+ownership between caller and callee, default is copy. Important to not might be, that a move in argument pulls the
+memory ownership into the function, making it inaccessible for the caller. If the caller tries to access such a variable
+after it has been moved away, the application will crash. Moving memory out differs little to copy out, as the move
+happens at the return point.
+If an argument by name appreas in the input and output list, it has to have the same type and the memory modifier has to
+be copy or reference.
+Passing a method map by value will create a hidden value type copy, that is then newly referenced by the method map
+type, passing a method map by value will avoid this.
+Optional arguments have to be at the end of the input argument list and will be `none` if omitted. They can not have
+explicit default values. Use `or` when you read the value instead.
+Placing an elipsis after the last input argument creates a vararg function, collecting all remaining arguments given to
+the function into a tuple of values of the specified type. E.g. in a function `fun x(copy any values ...)` values are
+accessibla as if declared with `tuple<any,...> value` where the amount of type parameters for the tuple equals the
+amount of values passed.
+Optionals and varargs can not be used both in the same signature.
 
 ### Type aliasing
 
-The syntax for type aliasing is `'def' NAME 'as' TYPE`. This is the only way to structs and methodmaps a name or to create function types.
+The syntax for type aliasing is `'def' NAME 'as' TYPE`. This is the only way to structs and methodmaps a name or to
+create function types.
 
 ### Method maps
 
-`'methodmap' ( '<' INHERITED_MMAP ( ',' INHERITED_MMAP ... ) )`
+`'methodmap' ( '<' INHERITED_MMAP ( ',' INHERITED_MMAP ... ) ) ( '@' BIND_TYPE ( ',' BIND_TYPE ... ) )`
 
-Method maps are reference types, this means that they do not hold any storage in memory themselfes, but instead bind to a value type by reference. This reference is then available as `this` within member functions.
-Methodmaps support inheritence. Other member functions, if visible according to the hierarchy, are collapsed onto `this`, overriding inherited implementations, to form a singular namespace. In case on name collisions between data members and function names, functions take precedence. Because method maps are only a reference wrapper around a different type, they can always be implicitly converted back to the underlying type. Because there is no function overloading, member functions are only distinguished and overridden by name.
+Method maps are reference types, this means that they do not hold any storage in memory themselfes, but instead bind to
+a value type by reference. This reference is then available as `this` within member functions.
 
-Since method maps are bound to storage types by the developer, a mechanism needs to be in place to limit and discriminate the type of `this` from within a member function. This can be done with `is` and `as` using pattern matching in members and the binder.
+A method map is not value type, like handles or structs, but a vehicle to attach methods to a value type.
 
-The binder function is analogous to a constructor but handles the case where a methodmap is bound to a storage type via `bind<methodmap>(storageInstance)`. To avoid typing the name of the method map multiple times, the function is just called `bind`, analogous to `new` or `constructor` functions in other languages. A methodmap can not be bound unless it has a bind function. It takes a storage type value by reference as first argument and has to assign this or `fail`. Reaching the end of the bind function without assigning this or failing is an error. Most of the time the implementation will be a single pattern match (See [pattern matching](#Pattern-Matching) below). e.g.:
+Methodmaps support inheritence. Other member functions, if visible according to the hierarchy, are collapsed onto
+`this`, overriding inherited implementations, to form a singular namespace. In case on name collisions between data
+members and function names, functions take precedence. Because method maps are only a reference wrapper around a
+different type, they can always be implicitly converted back to the underlying type. Because there is no function
+overloading, member functions are only distinguished and overridden by name.
+
+Since method maps are bound to storage types by the developer, a mechanism needs to be in place to limit and
+discriminate the type of `this` from within a member function. This can be done with `is` and `as` using pattern
+matching in members and the binder.
+
+A MethodMap can be bound to a value using the `bind<methodmap>(storagevalue)`syntax. This works similar
+to the placement new constructor in C++ where no allocation takes place, and the Interface is simply layered over the
+memory. However binding a methodmap this way does not execute any code.
+
+Method maps support a constructor, which is a special method named `new`. Calling a constructor has to assign `this`.
+If this is assigned to a value allocated within the constructor, ownership of the memory is passed back out to the
+caller of the constructor. Assigning this, even inside the constructor, has to be done using bind syntax. If no
+constructor is available, the method map can only be bound.
+
+In case construction fails, you can always signal this by binding an Error to `this`. Note that assigning `this` from
+within the method map is only ever allowed within the constructor. For the purpose of construction, you can imagine
+the function signature as `fun new(ref MethodMapType! this, /*input arguments*/)->()`.
+
+The constructor can be a single pattern match (See [pattern matching](#Pattern-Matching) below). e.g.:
+
 ```rust
 def methodmap_type as methodmap {
-  bind(ref any storage)->() with
+  fun new(ref any storage): with:
     match storage as storage_type value : this = value
-    match * : fail("Called bind on methodmap_type with unsupported storage type")
+    match * : this = ArgumentError("Called bind on methodmap_type with unsupported storage type")
+}
+def MyError as methodmap < Error @ Handle {
+  fun new(const str message):
+    this = bind<MyError>(fail(message))
 }
 ```
 
-Member functions of a method map have an implicit this, initialized in `bind`. Also note that `view_as` from and to the method map type is only valid inside members and binding has to be used otherwise. This is to ensure that the method map only operates on value types it knows how to handle.
+However you bind a methodmap, if `BIND_TYPE`s are specified, the bound value has to be of that type. `BIND_TYPE` also
+can not be another method map, it has to be a value type. Not specifying a bind type is equal to `@ any`. 
 
-For method maps that do extra work during binding, like connecting to a database, there is a second special member function, `unbind`. This is functionally equivalent to a destructor and will be called when the reference count of the method map reaches zero.
+Member functions of a method map have an implicit this, initialized in `bind`. Also note that `view_as` from method
+map type to the storage type is only valid inside members and binding has to be used otherwise. This is to ensure
+that the method map only operates on value types it knows how to handle.
 
-### Visibilities
+For method maps that do extra work during construction, like connecting to a database, there is a second special member
+function, `free`. This is functionally equivalent to a destructor and will be called when the reference count of the
+method map reaches zero. The unbind signature is `free()->()`, taking no arguments and not returning, as it's called
+automatically.
+
+### Visibilities & Qualifiers
 
 Functions, structs, method maps and method map members can have different visibility modifiers, as prefix keywords:
 
@@ -372,139 +702,193 @@ Functions, structs, method maps and method map members can have different visibi
 * `public` - default, project wide visibility
 * `protected` - only visible to this method map and it's inheritors (only in method maps)
 * `private` - only visible to this file / the implementing method map
+* `native` - additional qualifier, that marks only functions as native. This means that the function is not implemented
+  in place, but a promise to the linker, that an implementation exists somewhere. A native function has to NOP 
+  (semicolon) it's implementation in-place.
 
-Specifying a visibility on a method map changes where the method map can be used. For example, an exported function can not have a public, protected or private method map as argument, because the caller can not access the type.
+Specifying a visibility on a method map changes where the method map can be used. For example, an exported function can
+not have a public, protected or private method map as argument, because the caller can not access the type.
+
+Importing a dependency (not a project file) with an exported object treats it as "already implemented", so you don't
+have to implement it again.
 
 ## Statements and Expressions
 
-Statements terminate with a linebreak or semicolon. A linebreak is not terminating a statement if the line ends with an operator or the following line starts with one.
+Statements terminate with a linebreak or semicolon. A linebreak is not terminating a statement if the line ends with an
+operator or the following line starts with one.
 
-Compound statements are one or more statements within curly braces.
+Compound expressions are one or more statements within curly braces. Making blocks not statements allows for some
+syntactical sugar.
 
-The semicolon does not only terminate statements, but, if no statement preceeds to be terminated, also doubles as NOP (like `pass` in python).
-
-Branching/conditionals are in general separated by "then-statements" through a colon, or a linebreak. If the following statement is a compound statement, the explicit separator becomes optional.
-In the following sections, this conditionally optional sepratator is shortened with `sep`.
+The semicolon does not only terminate statements, but, if no statement preceeds to be terminated, also doubles as NOP (
+like `pass` in python).
 
 For all loops, `break` and `continue` work as usual.
 
 ### If
 
-`'if' EXPRESSION sep STATEMENT ( 'else' sep STATEMENT )`
+`'if' EXPRESSION SEPARATOR STATEMENT ( 'else' SEPARATOR STATEMENT )`
 
-As with c, one of the fundamentals is the if statement, that evaluates the first statement if the expression resolves true, or the second statement otherwise.
+As with most other languages, one of the fundamentals is the if statement, that evaluates the first statement if the
+expression resolves true, or the second statement otherwise.
 
 ### For
 
-`'for' TYPE NAME 'in' RANGE sep STATEMENT`
-`'for' TYPE NAME 'in' ITERABLE sep STATEMENT`
+`'for' ( MEM_MOD ) TYPE NAME 'in' RANGE SEPARATOR STATEMENT`
+`'for' ( MEM_MOD ) TYPE NAME 'in' ITERABLE SEPARATOR STATEMENT`
 
-Runs the statement of every value in an iterable or range. For ranges, the syntax is mathematical, meaning `[]` denote inclusive bounds and `()` or `][` denote exclusive bounds. Within bounds markers, you can put two or three expressions, evaluating to initial value, increment value and last value. Default increment is 1, the last value can be '...' for "infinite" sequences, separator is the comma.
-
-e.g. `for auto i in [1, ...[`, `for auto i in [0, 0.1, 1.0)`
+Runs the statement of every value in an iterable or range. As with functions, `MEM_MOD` is optional and defaults to
+`copy`. For range syntax, read below.
 
 ### Do, While, Until
 
-`'while' CONDITION sep STATEMENT`
-`'until' CONDITION sep STATEMENT`
-`'do' sep STATEMENT sep2 'while' CONDITION`
-`'do' sep STATEMENT sep2 'until' CONDITION`
+`'while' CONDITION SEPARATOR STATEMENT`
+`'until' CONDITION SEPARATOR STATEMENT`
+`'do' BLOCK_STATEMENT 'while' CONDITION`
+`'do' BLOCK_STATEMENT 'until' CONDITION`
 
-Execute the statement in a loop while condition holds true. The until form inverts the condition by default. sep2 is similar to sep, but peeks backwards for a block statement instead of forward.
+Execute the statement in a loop while condition holds true. The until form inverts the condition by default. Tail
+controlled loops require a block statement for a body to disamiguate nested loops.
 
 ### Pattern Matching
 
-Imagine c/c++ switch-case on steroids if you've never heard of pattern matching before. Also as expression, not a statement.
+Imagine c/c++ switch-case on steroids if you've never heard of pattern matching before. Also as expression, not a
+statement.
 
-`'with' ( EXPRESSION 'as' NAME )` starts the match statement. Lines that follow, starting with 'match' implement the match cases.
-Declaring an expression with name is optional if you match against variables from the parent context.
+`'with' ( EXPRESSION 'as' NAME ) ':'` starts the match statement. Lines that follow, starting with 'match' implement the
+match cases.
+Using 'EXPRESSION as NAME' is optional if you match against variables from the parent context. If you want to reuse the
+result of a more complex expression for matching without adding to the parent context, you can use this form. Name is a single label storing the evaluated expression.
 
-Match cases can span multiple lines and are not standalone statements but have to be terminated like one. Match cases are valid until a line does not match the syntax anymore. If specified, the result of the with-expression is available as if assigned with `const auto NAME = EXPRESSION`.
+Match cases can span multiple lines and, while not full statements, have to be terminated like statements. Match cases
+are valid until a line does not match the syntax anymore. If specified, the result of the with-expression is available
+as if assigned with `const auto NAME = EXPRESSION`.
 
-The result value of a match block is the value of the expression for the fist case that matched in declaration order. Matches never fall-through and only support expressions as values (nothing with compound statements, call a function if you want to do more complex stuff).
+The result value of a match block is the value of the expression for the fist case that matched in declaration order.
+Matches never fall-through and only support expressions as values (nothing with compound statements, call a function if
+you want to do more complex stuff).
 
-* `'match' EXPRESSION sep EXPRESSION` - the most basic form, checks for equality, if the expression does not contain `it`, checks true if it does.
-* `'match' RANGE sep EXPRESSION` - checks if the with-expression (if numeric) falls withing the range. The range syntax is equivalent to the one in for-loops, but without step size.
-* `'match' '*' sep EXPRESSION` - default case, has to be last.
+* `'match' EXPRESSION SEPARATOR EXPRESSION` - The match expression has to be a comparison, that has to evaluate true for the case to hit
+* `'match' '*' SEPARATOR EXPRESSION` - Default case, has to be last.
 
 Examples:
 
 ```rust
-with strToInt("42") as it
+with strToInt("42") as it:
     match it % 2 == 0 : print("Number is even")
-    match [50, 100] : print("value is between 50 and 100")
+    match 50 <= it <= 100 : print("value is between 50 and 100")
     match * :;
 
 any something
-with
-    match something as uint number && number == 42 :
+with:
+    match something as uint number && number == 42
         print("value is 42")
-    match * :
+    match *
         print("value is something else")
 
 float? optNum = ...
-float value = with
-    match optNum && !isNaN(optNum): optNum
+float value = with:
+    match optNum is float && !isNaN(optNum): optNum
     match *: 0
 ```
 
 ### Return
 
-Has no arguments and jumps to the end of a function. All return values have to be assigned before the function exits or the application is malformed.
+`return` has no arguments and immediately exits a function. It serves only for control flow.
+Do not however that all output arguments of a function, declared by the signature, have to be assigned before
+the function exits, or the application is malformed.
 
 ### Multiple files
 
 `'include' PATH_OR_LIBRARY ( 'as' NAMESPACE ) ( ATTRIBUTES )`
 
-Writing big projects in single files is ugly. Split your code across multiple files and share "public" and "external" symbols by including them in you main file. PATH_OR_LIBRARY has to be a string literal representing a file system path, that should not leave the project root directory (but you do you), or the name of a library. It's the dependency resolvers job to return the correct set of files from PATH_OR_LIBRARY if it doesn't point to a file.
+Writing big projects in single files is ugly. Split your code across multiple files and share "public" and "external"
+symbols by including them in you main file. PATH_OR_LIBRARY has to be a string literal representing a file system path,
+that should not leave the project root directory (but you do you), or the name of a library. It's the dependency
+resolvers job to return the correct file from PATH_OR_LIBRARY if it doesn't point to a file.
 
-If the namespace is not given, all symbols exported from the library are imported into you project namespace. If a namespace is specified, the symbols are moved to `NAMESPACE::SYMBOL`.
-
-ATTRIBUTES can be used by the depdencency resolver to specify more information like the version. It's recommended to support at least the attributes `@version("version spec")` and `@source("source spec")`.
-
-It is recommended to strongly prefer SemVer, and to only use exact versions, as developers often don't follow SemVer and any change in version might break your code. If a version can not be resolved, compilation shall fail. If no version is specified the compiler toolchain can try to get the latest version.
-
-Specifing a source for the library could mean a git repo, group and artifact name (like java does it), just a plain name like less capable dependency systems use, or literally anything else. If the source is unknown or not supported, compilation shall fail. If no source is specified the compiler toolchain can try to hit a default remote.
-
-Further mechanisms for depdenency management and control, like handling lockfiles, caching depdendency files, etc. are the responsibility of the dependency resolver.
-
-Structure and constraints for dependencies are responsibility of the compilation toolchain. Library name, version and namespace can not contain spaces or characters illegal in filesystem paths.
-
-Imported symbols always have public visibility (project wide, not transitive).
-
-To ensure compatibility between compilers and resolvers the following contract should be followed. The dependency resolver should expect to be invoked with arguments as follows: Attributes in the form @attribName("attribValue") are passed as --attribName attribValue, PATH_OR_LIBRARY is passed as is. Assume we want to include a theoretical openssl library at version 3.4.0 from a github repository. The include line would look like this: `include openssl @version("3.4.0") @source("https://github.com/openssl/openssl")`. The arguments to your dependency resolver would be `["openssl", "--version", "3.4.0", "--source", "https://github.com/openssl/openssl"]`. The dependency resolver should return a set of files with Lametta exports (one per line) and exit code 0 in case the dependency was optionally fetched and can be provided. Otherwise it should return a non-0 exit code and give a short explanation for the compiler to throw at the developer.
+If the namespace is not given, all symbols exported from the library are imported into you project namespace. If a
+namespace is specified, the symbols are moved to `NAMESPACE.SYMBOL`.
 
 ### Dependency management
 
-Dependency management is done with project files in many other languages, but using a certain library is integral to keeping the code working. For this reason, dependency management is part of the language. Python is almost there with the option to invoke pip if a dependency is missing and then late loading it. Because Lametta is a compiled langauge, we can not late load dependencies, but we can still give the compiler extensive specs for libraries we use.
+Dependency management is done with project files in many other languages, but using a certain library is integral to
+keeping the code working. For this reason, dependency management is part of the language. Python is almost there with
+the option to invoke pip if a dependency is missing and then late loading it. Because Lametta is a compiled langauge, we
+can not late load dependencies, but we can still give the compiler extensive specs for libraries we use.
 
-`'project'`
+#### Project attributes
 
-This is a keyword that does nothing on it's own, but can host various @attributes describing project metadata:
+You can add various @attributes describing project metadata at the start of a file, before any other statement. If your
+next statement would accept leading @attributes, you can put a semicolon after your project @attributes.
 
-`'@build(' NAME VERSION ( 'application' | 'staticlib' | 'dynamiclib' ) ')'`
+At least the 'build'-attribute shall be supported to specify the most basic information required to configure the build.
 
-Matching the import attribute, projects can define a name and version using this statement, in order for the compilation toolchain to put the resulting artifacts in the correct place for other projects to find them again (if desired). The default type, if not specified, is application. Name and version can not contain spaces or characters illegal in file system paths.
+`'@build' '(' NAME ',' VERSION ',' ( 'application' | 'staticlib' | 'dynamiclib' ) ')'`
+
+Matching the import attribute, projects can define a name and version using this statement, in order for the compilation
+toolchain to put the resulting artifacts in the correct place for other projects to find them again (if desired). The
+default type, if not specified, is application. Name and version can not contain spaces or characters illegal in file
+system paths.
+
+#### Imported Dependencies
+
+@attributes can be used by the depdencency resolver to specify more information like the version. It's recommended to
+support at least the attributes `@version("version spec")` and `@source("source spec")`.
+
+It is recommended to strongly prefer SemVer, and to only use exact versions, as developers often don't follow SemVer and
+any change in version might break your code. If a version can not be resolved, compilation shall fail. If no version is
+specified the compiler toolchain can try to get the latest version.
+
+Specifing a source for the library could mean a git repo, group and artifact name (like java does it), just a plain name
+like less capable dependency systems use, or literally anything else. If the source is unknown or not supported,
+compilation shall fail. If no source is specified the compiler toolchain can try to hit a default remote.
+
+Further mechanisms for depdenency management and control, like handling lockfiles, caching depdendency files, etc. are
+the responsibility of the dependency resolver.
+
+Structure and constraints for dependencies are responsibility of the compilation toolchain. Library name, version and
+namespace can not contain spaces or characters illegal in filesystem paths.
+
+Imported symbols always have public visibility (project wide, not transitive).
+
+To ensure compatibility between compilers and resolvers the following contract should be followed. The dependency
+resolver should expect to be invoked with arguments as follows: Attributes in the form @attribName("attribValue") are
+passed as --attribName attribValue, PATH_OR_LIBRARY is passed as is. Assume we want to include a theoretical openssl
+library at version 3.4.0 from a github repository. The include line would look like this:
+`include openssl @version("3.4.0") @source("https://github.com/openssl/openssl")`. The arguments to your dependency
+resolver would be `["openssl", "--version", "3.4.0", "--source", "https://github.com/openssl/openssl"]`. The dependency
+resolver should return a set of files with Lametta exports (one per line) and exit code 0 in case the dependency was
+optionally fetched and can be provided. Otherwise it should return a non-0 exit code and give a short explanation for
+the compiler to throw at the developer.
 
 ### Reinterpreting Memory
 
 `'view_as' '<' T '>' '(' r ')'`
 
-view_as will reinterpret a value of type R as if it was of type T. The constraint for this to be valid is, that both R and T are statically sized value types, or that T is a method map and view_as is called in a member of T.
+view_as will reinterpret a value of type R as if it was of type T. The constraint for this to be valid is, that both R
+and T are fixed sized value types. If view_as is called inside a method map member, the method map type is allowed for T
+or this for R, giving members access to the underlying data.
 
 ### Converting Types
 
 `'cast' '<' T '>' '(' r ')'`
 
-Cast converts a value of type R to and expect of type T. This will, in most cases invoke a custom conversion function `fun cast(ref R r)->(move T! t)` that can deal with statically and dynamically sized types and method maps, possibly failing if e.g. a value range is exceeded.
+Cast converts a value of type R to and expect of type T. This will, in most cases invoke a custom conversion function
+`@cast fun cast(const R r)->(move T! t)` that can deal with fixed and dynamically sized types and method maps, possibly
+failing if e.g. a value range is exceeded.
 
 ### Binding Types
 
 `'bind' '<' T '>' '(' ( NAME | ADDRESS ) ')'`
 
-If the value is of type address and T represents a statically sized type, this will create a reference variable of type T that is pointing to the given address. Be careful as taking such a variable by value will copy the current memory (if readable) away from the bound address.
+If the value is of type address and T represents a fixed sized type, this will create a reference variable of type T
+that is pointing to the given address. Be careful as taking such a variable by value will copy the current memory (if
+readable) away from the bound address.
 
-When T is a method map type, the bind will try to call the `bind`-function of the method map to construct an return the result. If the value to be bound is not accepted by the method map's `bind`-function, compilation will fail.
+When T is a method map type, then bind will return a reference type with the interface overlayed on top of the storage
+value, or fail, if the value type is not a valid bind type for the method map. The exptected `T!` returned from such a
+bind call can be assigned to a `T` variable without checking, crashing the application if the bind failed.
 
 In any other case, bind is invalid.
 
@@ -512,13 +896,98 @@ In any other case, bind is invalid.
 
 `r 'is' T` and `r 'as' T t`
 
-The keywords `is` and `as` can be used to check if the type of an instance r matches the specified type T. In case of mehtod maps the check is also valid for base method maps to e.g. check for the existance of interfaces. The difference between `is` and `as` is, that `as` will give you a reference T to r. This will not bind, cast or view_as, but can convert `any` to a concrete type.
+The keywords `is` and `as` can be used to check if the type of an instance r matches the specified type T. In case of
+mehtod maps the check is valid for value types as well as base method maps to e.g. check for the existance of
+interfaces. The difference between `is` and `as` is, that `as` will give you a reference T to r. This will view_as,
+if possible, allowing to convert `any` to a concrete type.
 
-For the purpose of compound statements, t shall be available immediately after the check. (e.g. `r as uint t && t > 100` is valid syntax and behaves as expected).
+For the purpose of compound statements, t shall be available immediately after the check. (e.g. `r as uint t && t > 100`
+is valid syntax and behaves as expected).
 
-### typeof
+### or
 
-`'typeof' THING`
+`x or y`
 
-Returns a `Type` methodmap that allows you to inspect various aspects of a type. Check the reference implementation for what you can expect from this interface.
+Or is a special keyword that can be used to provide a fallback for empty optionals. The left side needs to be an
+expression of optional or expect T type, while the right hand needs to be of T type. If the left hand is an expect,
+it will be converted to optional first.
+
+### type_of
+
+`'type_of' THING`
+
+Returns a `Type` methodmap that allows you to inspect various aspects of a type. Check the reference implementation for
+what you can expect from this interface.
 For a struct this includes things like fix sized, name and members. The member list might be obfuscated or inaccurate.
+
+### keys
+
+`'keys' THING`
+
+Returns an unordered set of keys from a collection THING, that is an array, vector, list or dict.
+For dictionaries, it's a `set<K>`, otherwise it's a `set<uint>`. The set is a copy, and does not reflect changes to the
+container.
+
+## Required Builtins
+
+### print
+
+`fun print(const str? format, const any args...)->()`
+
+Simple line based output, using a python style format string and arguments.
+
+### crash
+
+`fun crash(const str? msg)->()`
+
+Handling a failed value, by casting to error, allows for resource management before failing further up the call chain.
+Optionals on the other hand are intended for all instances where the absence of a value does not prevent execution form
+continuing, like getting a value for a key not set in a map.
+
+For truly unrecoverable errors, you can use the `crash()` built in with an optional message. Crashing, be it through
+`crash()` or unboxing an optional/expect incorrectly, will always terminate the application on the spot.
+
+Crash will still generate aand dump a stacktrace, so you don't have to get creative with errors.
+
+### fail
+
+`fun fail(const str? msg)->(move Error errorBase)`
+
+This function allocates the base object for errors, that supports the methods of the `Error` method map.
+
+### cast
+
+Cast functions can have any name, but require the `@cast`-attribute and a signature of single in, single out. On most
+hardware, to increase performance, complex types it should be const in, move out and for primitives like numbers it
+should be copy in, copy out.
+
+The compiler will generate cast chains, if no direct cast from A to B is possible, at a possible performance penalty.
+
+For all numeric types A and B:
+Widen with sign-extend or zero-extend, truncate when narrowing
+`@cast fun cast_A_B(A a)->(B b)`
+
+For strings of all bit widths X for encodings UTF-8, UTF-16 and UTF-32:
+Invalid codepoints are encoded as well.
+`@cast fun cast_str_vuX(const str in)->(move vec<uX> out)`
+`@cast fun cast_vuX_str(const vec<uX> in)->(move str out)`
+
+For all string <-> number conversions:
+`@cast fun cast_str_N(const str in)->(N out)`
+`@cast fun cast_N_str(N in)->(move str out)`
+
+Since there are no generics in functions, conversion between container types is done by assignments automatically.
+Dictionaries can not cast to anything else and have to be processed by other means.
+
+### isValid
+
+`fun isValid(ref Handle hdl)->(bool valid)`
+
+Check if the resource backed by a handle is still valid. Validity is based on the opaque backend (e.g. native
+dependency):
+
+### real/imag
+
+For all complex number C of some bit width and a float number F of the same width:
+`fun real(C complex)->(F realPart)`
+`fun imag(C complex)->(F imagPart)`
