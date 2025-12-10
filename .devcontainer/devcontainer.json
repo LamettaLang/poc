@@ -1,0 +1,38 @@
+{
+  "name": "Lametta Compiler",
+  "dockerComposeFile": [
+    "docker-compose.yml"
+  ],
+  "service": "gcc",
+  "workspaceFolder": "/usr/mybcp",
+  "remoteUser": "mybcp",
+  "containerUser": "mybcp",
+  "postAttachCommand": "./entrypoint.sh",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "tasks": {
+          "version": "2.0.0",
+          "tasks": [
+            {
+              "type": "shell",
+              "label": "MyBCP: build compiler",
+              "command": "./build.sh --build-type Debug",
+              "args": [],
+              "options": {
+                "cwd": "${workspaceFolder}"
+              },
+              "problemMatcher": [
+                "$gcc"
+              ],
+              "group": {
+                "kind": "build",
+                "isDefault": true
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

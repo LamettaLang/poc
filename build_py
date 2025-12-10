@@ -1,0 +1,503 @@
+#!/usr/bin/env python3
+# This file is part of MyBCP
+# There's no .py extension to prevent running this script directly on accident, outside a venv
+
+import argparse
+import errno
+import itertools
+import os
+import re
+import shutil
+import subprocess
+import sys
+import zipfile
+from contextlib import suppress
+from functools import total_ordering
+from pathlib import Path
+from urllib import request as webrequest
+
+
+def flush():
+    # sync out streams before and after subprocess calls
+    sys.stdout.flush()
+    sys.stderr.flush()
+
+
+def cmp(a, b):
+    return (a > b) - (a < b)
+
+
+def reg_subkeys(path, group="HKLM"):
+    reg_map = dict([("HKLM", winreg.HKEY_LOCAL_MACHINE), ("HKCU", winreg.HKEY_CURRENT_USER)])
+    with suppress(WindowsError), winreg.OpenKey(reg_map[group], str(path)) as key:
+        for i in itertools.count():
+            yield winreg.EnumKey(key, i)
+
+
+def reg_get(path, value_name=None, group="HKLM"):
+    reg_map = dict([("HKLM", winreg.HKEY_LOCAL_MACHINE), ("HKCU", winreg.HKEY_CURRENT_USER)])
+    with suppress(WindowsError), winreg.OpenKey(reg_map[group], str(path)) as key:
+        value, _ = winreg.QueryValueEx(key, value_name)
+        return value
+    return None
+
+
+def reg_findkey(*paths):
+    results = []
+    reg_map = dict([("HKLM", winreg.HKEY_LOCAL_MACHINE), ("HKCU", winreg.HKEY_CURRENT_USER)])
+    for group in reg_map.keys():
+        for path in paths:
+            with suppress(WindowsError), winreg.OpenKey(reg_map[group], str(path)) as key:
+                results.append((group, path))
+    return results
+
+
+def version_valid(string):
+    pattern = re.compile(r"^[0-9]+(?:\.[0-9]+){0,2}(?:[-+][a-zA-Z]*[0-9]*)?$")
+    return pattern.fullmatch(string) is not None
+
+
+@total_ordering
+class version:
+    def __init__(self, string):
+        if not version_valid(string):
+            raise ValueError("Not a valid version string")
+        parts = string.split("-")
+        self.suffix = parts[1] if len(parts) == 2 and len(parts[1]) > 0 else ''
+        numbers = [int(x) for x in parts[0].split('.')]
+        numbers = [*numbers, *[0, 0, 0][len(numbers):]]  # pad to len 3
+        self.major, self.minor, self.patch = numbers
+
+    def compare(self, other):
+        val = cmp(self.major, other.major)
+        if (val != 0):
+            return val
+        val = cmp(self.minor, other.minor)
+        if (val != 0):
+            return val
+        val = cmp(self.patch, other.patch)
+        return val
+
+    def __lt__(self, other):
+        return self.compare(other) < 0
+
+    def __eq__(self, other):
+        return self.compare(other) == 0
+
+    def __repr__(self):
+        if self.suffix:
+            return f"{self.major}.{self.minor}.{self.patch}-{self.suffix}"
+        return f"{self.major}.{self.minor}.{self.patch}"
+
+
+def processor_arch_for_msvc_target():
+    arch = os.getenv('PROCESSOR_ARCHITECTURE', '').lower()
+    if not arch:
+        return None
+    mapping = {'x86': 'x86', 'arm64': 'armv8', 'amd64': 'x86_64'}
+    return mapping.get(arch, None)
+
+
+def msvc_version_for_vs_version():
+    studio_version = os.getenv('VisualStudioVersion', None)
+    if studio_version is None:
+        return None
+    studio_version = version(studio_version)
+    if not isinstance(studio_version, version):
+        raise ValueError()
+    mapping = {14: 190, 15: 191, 16: 192, 17: 193}
+    return mapping.get(studio_version.major, None), studio_version.major
+
+
+def cmake_generator_name_for_vs_version():
+    studio_version = os.getenv('VisualStudioVersion', None)
+    if studio_version is None:
+        return None
+    studio_version = version(studio_version)
+    mapping = {14: 2015, 15: 2017, 16: 2019, 17: 2022}
+    if not studio_version.major in mapping:
+        return None
+    return f"Visual Studio {studio_version.major} {mapping[studio_version.major]}"
+
+
+def vs_variant_valid(name):
+    if name is None or not name.startswith("Visual Studio"):
+        return False, None, None, None
+    name = name[13:].lstrip()
+    known_editions = ("Community", "Enterprise", "Professional", "Build Tools")
+    edition = next((ed for ed in known_editions if name.startswith(ed)), None)
+    if edition is None:
+        return False, None, None, None
+    name = name[len(edition):].lstrip()
+    known_versions = ("2019", "2022")
+    version = next((ver for ver in known_versions if name.startswith(ver)), None)
+    if version is None:
+        return False, None, None, None
+    name = name[4:].lstrip()
+    preview = name.startswith("Preview")
+    return True, edition, version, preview
+
+
+def find_vs_installdir():
+    paths = reg_findkey("SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+                        "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall")
+    instances = []
+    for grp, key in paths:
+        for sub in reg_subkeys(key, grp):
+            found, edition, version, preview = vs_variant_valid(reg_get(Path(key) / sub, "DisplayName", grp))
+            if found:
+                instances.append((reg_get(Path(key) / sub, "InstallLocation", grp), edition, version, preview))
+    instances = sorted(instances, key=lambda x: (x[2], int(x[3])),
+                       reverse=True)  # sort by version desc, then preview over non-preview
+    return next((i[0] for i in instances if i[0]), None)  # sanity check: require install location
+
+
+def import_msbuild_env(path):
+    try:
+        toolpath = Path(path) / "Common7" / "Tools"
+        if not toolpath.is_dir():
+            return None, None
+        print("Loading Build Env from", toolpath)
+        # the two scritpt should fill in all env vars we need with paths to msbuild and cl
+        flush()
+        complete = subprocess.run(
+            f"echo off & VsMSBuildCmd.bat & vsdevcmd\\ext\\vcvars.bat & echo on & where msbuild & echo. & set",
+            stdout=subprocess.PIPE, check=True, shell=True, encoding="utf-8", cwd=toolpath)
+        flush()
+        lines = [l.strip() for l in complete.stdout.splitlines()]
+        lines = lines[5:]  # header/logo
+        msbuild_path = None
+        lineno = 0
+        while True:
+            if not lines[lineno]:
+                lines = lines[lineno + 1:]
+                break
+            msbuild_path = lines[lineno]
+            lineno += 1
+        env_map = dict((tuple(e.split("=", 1)) for e in lines))
+        return msbuild_path, env_map
+    except:
+        raise
+    return None, None
+
+
+def check_compiler(suggested_path):
+    if shutil.which('msbuild'):
+        return True  # env already set up
+
+    path = suggested_path if suggested_path else find_vs_installdir()
+    if path:
+        path, env = import_msbuild_env(path)
+        if path and env:
+            os.environ.update(env)
+    return bool(path)
+
+
+def check_cmake():
+    if shutil.which('cmake'):
+        return True  # already was found
+
+    try:
+        print(" ====== Preparing CMake ======")
+        flush()
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "--require-virtualenv", "cmake"])
+        flush()
+        return True
+    except:
+        return False
+
+
+def check_conan():
+    if shutil.which('conan'):
+        return True  # already was found
+
+    try:
+        print(" ====== Preparing Conan ======")
+        flush()
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "--require-virtualenv", "conan"])
+        flush()
+        return True
+    except:
+        return False
+
+
+def build_template_files(plat, where):
+    if plat == 'windows':
+        arch = processor_arch_for_msvc_target()
+        compver, vsver = msvc_version_for_vs_version()
+
+        if arch is None:
+            print("Target processor arch is not supported")
+            return False
+        if compver is None:
+            print("MSVC compiler version not detected")
+            return False
+
+        # create conanprofile.txt
+        if not Path('conanprofile.txt').is_file():
+            with open('conanprofile.txt', 'w') as f:
+                f.writelines(f"""[settings]
+arch={arch}
+build_type=Release
+compiler=msvc
+compiler.cppstd=23
+compiler.version={compver}
+compiler.runtime=dynamic
+os=Windows
+
+[conf]
+tools.microsoft.msbuild:vs_version={vsver}
+""")
+    else:
+        arch = subprocess.check_output(['uname', '-m']).decode("utf-8").strip()
+        compver = subprocess.check_output("g++ --version | head -n1 | cut -d\\) -f2 | cut -d. -f1-2",
+                                          shell=True).decode("utf-8").strip()
+
+        print('Arch', arch, 'CompVer', compver)
+
+        if arch is None:
+            print("Target processor arch is not supported")
+            return False
+        if compver is None:
+            print("MSVC compiler version not detected")
+            return False
+
+        # create conanprofile.txt
+        if not Path('conanprofile.txt').is_file():
+            with open('conanprofile.txt', 'w') as f:
+                f.writelines(f"""[settings]
+arch={arch}
+build_type=Release
+compiler=gcc
+compiler.cppstd=gnu23
+compiler.version={compver}
+compiler.libcxx=libstdc++
+os=Linux
+""")
+
+    # create conanfile.txt
+    if not Path('conanfile.txt').is_file() and not Path('conanfile.py').is_file():
+        with open('conanfile.txt', 'w') as f:
+            f.writelines("""[requires]
+# place your dependencies here. you can find packages at https://conan.io/center
+
+[generators]
+CMakeDeps
+CMakeToolchain
+""")
+
+    # check default profile
+    flush()
+    conan_home = subprocess.run(f"conan config home", shell=True, check=True, stdout=subprocess.PIPE,
+                                encoding="utf-8").stdout.splitlines()[0]
+    print("Conan Home:", conan_home)
+    default_file = Path(conan_home) / 'profiles/default'
+    if not default_file.is_file():
+        subprocess.check_call(f"conan profile detect --force", shell=True, encoding="utf-8", env=os.environ)
+    flush()
+
+    canBuild = True
+
+    # create CMakeLists.txt
+    if not Path('CMakeLists.txt').is_file():
+        canBuild = False
+        with open('CMakeLists.txt', 'w') as f:
+            f.writelines("""cmake_minimum_required(VERSION 3.24)
+# your project name is used for deriving binary names and to add dependencies
+project(application)
+
+# find dependencies here
+# use the CMake package name listed on conan.io
+# find_package(zlib REQUIRED)
+
+# add your cpp files here. header files are found if #included in the cpp files.
+set(SOURCE_FILES src/main.cpp)
+
+add_executable(${PROJECT_NAME} ${SOURCE_FILES})
+
+# add dependencies to your executable
+# use the CMake target name listed on conan.io
+# target_link_libraries(${PROJECT_NAME} ZLIB::ZLIB)
+""")
+
+    if not Path('src').is_dir():
+        canBuild = False
+        Path('src').mkdir(mode=0o777, exist_ok=True)
+    if not Path('include').is_dir():
+        Path('include').mkdir(mode=0o777, exist_ok=True)
+
+    return canBuild
+
+
+def build_run(*cmd, sub=None):
+    print('> Running :', ' '.join(cmd))
+    flush()
+    subprocess.check_call(cmd, encoding="utf-8", env=os.environ, cwd=sub)
+    flush()
+
+
+def find_toolchain_file_relative(where, build_type):
+    if (where / 'conan_toolchain.cmake').is_file():
+        return where / 'conan_toolchain.cmake'
+    elif (where / 'build' / 'generators' / 'conan_toolchain.cmake').is_file():
+        return where / 'build' / 'generators' / 'conan_toolchain.cmake'
+    elif (where / 'build' / build_type / 'generators' / 'conan_toolchain.cmake').is_file():
+        return where / 'build' / build_type / 'generators' / 'conan_toolchain.cmake'
+    else:
+        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), 'conan_toolchain.cmake')
+
+
+def path_escape_spaces(path, plat):
+    if plat == 'windows':
+        return str(path).replace(' ', '^ ')
+    else:
+        return str(path).replace(' ', '\\ ')
+
+
+def build(plat, where, build_type, cmake_args, install):
+    try:
+        # tool chain file requires full path for .py configurations over filename for .txt conanfiles
+        if install:
+            build_run("conan", "create", ".", "-s", "build_type=" + build_type)
+        elif plat == 'windows':
+            generator = cmake_generator_name_for_vs_version()
+            if generator is None:
+                return False
+
+            build_run("conan", "install", ".", "--profile", ".\\conanprofile.txt", f"--output-folder",
+                      path_escape_spaces(where, plat), "-s", "build_type=" + build_type, "--build", "missing")
+            tc_file = find_toolchain_file_relative(where, build_type)
+            build_run("cmake", "..", "-G", generator, "-DCMAKE_TOOLCHAIN_FILE=" + path_escape_spaces(tc_file, plat),
+                      *cmake_args, sub=where)
+            build_run("cmake", "--build", ".", "--config", build_type, sub=where)
+        else:
+            build_run("conan", "install", ".", "--profile", "./conanprofile.txt", f"--output-folder",
+                      path_escape_spaces(where, plat), "-s", "build_type=" + build_type, "--build", "missing")
+            tc_file = find_toolchain_file_relative(where, build_type)
+            build_run("cmake", "..", "-DCMAKE_TOOLCHAIN_FILE=" + path_escape_spaces(tc_file, plat),
+                      "-DCMAKE_BUILD_TYPE=" + build_type, *cmake_args, sub=where)
+            build_run("cmake", "--build", ".", sub=where)
+        return True
+    except FileNotFoundError as e:
+        print(e)
+        return False
+    except:
+        return False
+
+
+def update():
+    # update wihtout installing git
+    print("Updating MyBCP to latest")
+    # make temp dir
+    tmpdir = Path('mybcp').absolute()
+    if not tmpdir.exists():
+        tmpdir.mkdir(mode=0o777, exist_ok=True)
+    # download and unpack
+    req = webrequest.Request('https://github.com/DosMike/MyBCP/archive/refs/heads/master.zip',
+                             headers={'User-Agent': 'MyBCP/1.0 DosMike(GitHub)'}, method='GET')
+    with webrequest.urlopen(req) as src, open(tmpdir / 'mybcp_update.zip', 'wb') as dst:
+        shutil.copyfileobj(src, dst)
+    with zipfile.ZipFile(tmpdir / 'mybcp_update.zip', 'r') as archive:
+        archive.extractall(tmpdir)
+    # apply filtered
+    for path, dirs, files in os.walk(tmpdir / 'MyBCP-master'):
+        for file in files:
+            if file.startswith('build'):
+                shutil.copyfile(Path(path, file), Path(file))
+        break
+    # clean up
+    shutil.rmtree(tmpdir)
+    print("success")
+    exit(0)
+
+
+def main(plat, args):
+    if args.update:
+        update()
+
+    if not check_cmake():
+        print("Could not find or install CMake")
+        exit(1)
+
+    if not check_conan():
+        print("Could not find or install Conan")
+        exit(1)
+
+    if plat == 'windows' and not check_compiler(args.compiler_path):
+        if args.compiler_path:
+            print("The suggested path did not contain a vaild build environment")
+        else:
+            print("Could not find Microsoft Visual Studio or Build Tools")
+            print("  Please go to https://visualstudio.microsoft.com/de/downloads/, and install Visual Studio for C++")
+        exit(1)
+
+    flush()
+    if args.devshell:
+        if plat == 'windows':
+            subprocess.run('cmd', encoding="utf-8", env=os.environ)
+        elif plat == 'linux':
+            subprocess.run('gnome-terminal', encoding="utf-8", env=os.environ)
+        return
+    flush()
+
+    print(" ====== Preparing Build ======")
+    if args.rebuild and args.build_dir.is_dir():
+        try:
+            shutil.rmtree(args.build_dir)
+        except Exception as e:
+            print("Could not remove build directory:", " ".join(e.args))
+            exit(1)
+    args.build_dir.mkdir(mode=0o777, parents=True, exist_ok=True)
+
+    if not build_template_files(plat, args.build_dir):
+        print("The project space is now set up")
+        return  # we just generated these files, there wont be anything to build
+
+    print(" ====== Building Project ======")
+    if not build(plat, args.build_dir, args.build_type, args.cmake_args, args.install):
+        print("Build failed (see above)")
+        exit(1)
+
+
+if '__main__' == __name__:
+    # normalize run path (cwd to script path)
+    os.chdir(Path(__file__).absolute().parent)
+
+    plat = 'linux' if sys.platform.startswith('linux') else 'windows'
+    if plat != 'linux' and not sys.platform.startswith('win'):
+        print('Unsupported OS', sys.platform)
+        sys.exit(1)
+
+    if plat == 'windows':
+        import winreg  # no bueno on linux
+
+    # setup args
+    ap = argparse.ArgumentParser(prog='MyBCP', description='Cpp tool wrapper and loader for Windows',
+                                 epilog='https://github.com/DosMike/MyBCP/', prefix_chars='-/')
+    ap.add_argument('--rebuild', action="store_true", dest="rebuild", help="Delete build directory and build clean")
+    ap.add_argument('--cmake-args', action="extend", nargs="+", dest="cmake_args", default=[],
+                    help="Arguments to pass to cmake. These are appended at the end.")
+    ap.add_argument('--vs-dir', type=Path, dest="compiler_path",
+                    help="Path to visual studio installation. If not specified, it is detected automatically")
+    ap.add_argument('--build-dir', type=Path, dest="build_dir", default=Path('./build'),
+                    help="Subdirectory to build in")
+    ap.add_argument('--devshell', action="store_true",
+                    help="Start a new command prompt in a complete dev environment. The venv is active and MSVC is discovered, so you can manage python packages load your IDE or whatever")
+    ap.add_argument('--build-type', choices=["Release", "Debug"], dest="build_type", default="Release",
+                    help="Debug build type might enable debug symbols and other features")
+    ap.add_argument('--update', action="store_true", dest="update", help="Update MyBCP from GitHub")
+    ap.add_argument('--install', action="store_true", dest="install",
+                    help="Install the package into the local conan cache (requires a conanfile.py)")
+    args = ap.parse_args(sys.argv[1:])
+    # additional validation
+    try:
+        if not args.build_dir:
+            raise ValueError("NONE")
+        args.build_dir = args.build_dir.absolute().relative_to(os.getcwd())
+        if args.build_dir.exists() and (args.build_dir.samefile(os.getcwd()) or not args.build_dir.is_dir()):
+            raise ValueError("Invalid Path")
+    except Exception as e:
+        print("--build-dir has to be a subdirectory:", " ".join(e.args))
+        exit(1)
+    # go
+    main(plat, args)

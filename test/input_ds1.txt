@@ -1,0 +1,153 @@
+// Example Lametta program demonstrating various language features
+// Note: Some parts may have assumptions or require specific @cast functions
+
+@build("example_project", "1.0.0", "application")
+
+// ----------------------------
+// Type Definitions
+// ----------------------------
+
+// Closed enum for payment methods
+def PaymentMethod as enum<str> {
+    CREDIT_CARD = "credit_card",
+    PAYPAL = "paypal",
+    BANK_TRANSFER = "bank_transfer"
+}
+
+// Open enum for status flags
+def StatusFlags as enum<u32> open {
+    FLAG_A = 0x1,
+    FLAG_B = 0x2,
+    FLAG_C = 0x4
+}
+
+// Fixed-size struct (all members fixed-size)
+def AccountInfo as struct {
+    u32 id;
+    u8[16] uuid;  // Fixed-size array
+    f32 balance;
+}
+
+// Dynamic-size struct (contains string)
+def UserProfile as struct {
+    u32 id;
+    str name;      // Makes struct dynamic
+}
+
+// ----------------------------
+// Method Maps
+// ----------------------------
+
+def FileError as methodmap < Error {
+    fun bind(const str file)->(ref auto! this) {
+        // Valid view_as usage inside methodmap
+        this = view_as<FileError>(bind<Error>("File error: " + file))
+        putContext("file", file)
+    }
+
+    export fun file()->(const str file) {
+        file = context("file")
+    }
+}
+
+// ----------------------------
+// Functions
+// ----------------------------
+
+// Transaction processor with error handling
+fun processTransaction(move AccountInfo account, f32 amount)->(AccountInfo! updated) {
+    if (amount < 0) {
+        updated = bind<ValueError>("Negative amount")
+        return
+    }
+
+    account.balance = account.balance + amount;
+    updated = account;
+}
+
+// Vector processing with streaming operators
+fun filterAndTransform(vec<u32> nums)->(vec<u32> result) {
+    result = nums
+        ::? (const n) n % 2 == 0      // Filter even numbers
+        :: (const n) n * 3;           // Multiply by 3
+}
+
+// ----------------------------
+// Main Program
+// ----------------------------
+
+fun main()->() {
+    // ----------------------------
+    // Enum Usage
+    // ----------------------------
+    PaymentMethod pm = PaymentMethod.CREDIT_CARD;
+    print("Payment method: {}", cast<str>(pm));
+
+    StatusFlags flags = FLAG_A | FLAG_C;
+    if (flags & FLAG_A) print("Flag A is set");
+
+    // ----------------------------
+    // Struct Handling
+    // ----------------------------
+    AccountInfo acc = {
+        id = 1,
+        uuid = u8[16]{0},  // Zero-initialized array
+        balance = 100.0f
+    };
+
+    // ----------------------------
+    // Error Handling
+    // ----------------------------
+    AccountInfo! res = processTransaction(move acc, -50.0f);
+    if (res is Error) {
+        print("Transaction failed: {}", cast<str>(res));
+        crash();
+    }
+
+    // ----------------------------
+    // Container Operations
+    // ----------------------------
+    vec<u32> numbers = {1, 2, 3, 4, 5};
+    numbers = filterAndTransform(numbers);
+
+    // Pipe operator example
+    numbers
+        |> cast<str>  // Assuming @cast(vec<u32> to str) exists
+        |> print;
+
+    // ----------------------------
+    // Pattern Matching
+    // ----------------------------
+    any data = 42u;
+    str description = with data as d
+        match d is u32 && d == 42: "The Answer"
+        match d is str: "String value"
+        match *: "Unknown type";
+    print("Match result: {}", description);
+
+    // ----------------------------
+    // Memory Operations
+    // ----------------------------
+    u32 magic = 0xDEADBEEF;
+    u8[4] bytes = view_as<u8[4]>(magic);  // Valid fixed-size conversion
+    print("Bytes: {}", cast<str>(bytes));
+
+    // ----------------------------
+    // Handle Usage
+    // ----------------------------
+    Handle hdl = acquireResource();  // Hypothetical handle acquisition
+    if (!isValid(hdl)) {
+        print("Invalid handle!");
+    }
+
+    Handle cloned = cloneHandle(hdl);
+    // ... use cloned handle ...
+
+    // ----------------------------
+    // Method Map Binding
+    // ----------------------------
+    FileError! fileErr = bind<FileError>("/path/to/file");
+    if (fileErr is FileError) {
+        print("Error accessing file: ${}", fileErr.file());
+    }
+}

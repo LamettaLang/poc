@@ -1,0 +1,43 @@
+#!/bin/bash
+set -euo pipefail
+cd "$(dirname "$(realpath -e "${BASH_SOURCE[0]}")")"/..
+
+setup() {
+    pip install pre-commit clang-format clang-tidy
+    pre-commit install
+    pre-commit install --hook-type commit-msg
+}
+
+autofix() {
+    echo " > CLang-Format"
+    find src include -regextype posix-extended -regex '.*\.([hc](pp|xx)?|hh|cc)$' -exec clang-format -style=file -i {} \;
+    echo " > CLang-Tidy"
+    find src include -regextype posix-extended -regex '.*\.([hc](pp|xx)?|hh|cc)$' -exec clang-tidy --extra-arg=-std=c++23 --enable-module-headers-parsing --fix -p build {} \;
+}
+
+runpc() {
+    if [[ "$#" -gt 0 ]]; then
+        pre-commit run "$@"
+    else
+        pre-commit
+    fi
+}
+
+if [[ "$#" -eq 0 ]]; then
+  runpc
+  exit 0
+fi
+cmd="$1"; shift
+case "$cmd" in
+  setup | install | i )
+    setup
+    ;;
+  autofix | fix )
+    autofix
+    ;;
+  * )
+    echo "Unknown command, usage: pre-commit/run [setup|install|i]"
+    echo "Without arguments, pre-commit is called."
+    ;;
+esac
+

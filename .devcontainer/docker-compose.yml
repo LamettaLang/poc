@@ -1,0 +1,36 @@
+name: lametta-compiler-devcontainer
+
+services:
+  gcc:
+    container_name: lametta-devcontainer
+
+    image: "lametta-dev-container:dev"
+    pull_policy: never
+    build:
+      context: ".."
+      args:
+        # these just need to be set, dev containers will patch uid&gid
+        REMOTE_UID: 1000
+        REMOTE_GID: 1000
+        REMOTE_USER: mybcp
+        BUILDKIT_INLINE_CACHE: 0
+
+    # if you will use a ptrace-based debugger like C++, Go, and Rust.
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:unconfined
+
+    volumes:
+      - "../:/usr/mybcp/:rw"
+      - "../.conan2_docker:/home/mybcp/.conan2:rw"
+
+    environment:
+      DOCKER: "devcontainer"
+
+    # entrypoint.sh keeps container running
+    # command:
+    stdin_open: true
+    tty: true
+    restart: "no"
+    userns_mode: keep-id

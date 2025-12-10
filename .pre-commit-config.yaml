@@ -1,0 +1,16 @@
+# pip install pre-commit
+# pre-commit install
+# pre-commit run --all-files
+files: '^(src|include)/.*$'
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+  - repo: https://github.com/pocc/pre-commit-hooks
+    rev: v1.3.5
+    hooks:
+      - id: clang-format
+        args: [ --style=file ]
+      - id: clang-tidy
+        args: [ --extra-arg=-std=c++23, --enable-module-headers-parsing, -p, build ]

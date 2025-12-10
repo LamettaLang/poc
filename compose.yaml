@@ -1,0 +1,23 @@
+name: lametta-compiler
+
+services:
+  gcc:
+    image: "lametta-build-container:dev"
+    pull_policy: never
+    build:
+      context: "."
+      args:
+        REMOTE_UID: ${UID}
+        REMOTE_GID: ${GID}
+        REMOTE_USER: ${USER}
+
+    volumes:
+      - "./:/usr/mybcp/:rw"
+      - "./.conan2_docker:/home/mybcp/.conan2:rw"
+
+    environment:
+      DOCKER: "build"
+
+    restart: "no"
+    stdin_open: true
+    tty: true
