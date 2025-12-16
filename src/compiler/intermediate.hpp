@@ -231,7 +231,7 @@ struct FunctionCall : public Value
 			if (!first) {
 				ostream << ", ";
 			}
-			std::cout << elem;
+			elem->dumps(ostream);
 			first = false;
 		}
 		ostream << ")";

@@ -294,13 +294,10 @@ TokenStream::fillQueue(size_t size) -> size_t
 		if (!pushToken()) {
 			break;
 		}
+		std::println("[DBG] Pushed: {} {}", *(peekQueue.crbegin()->type), peekQueue.crbegin()->token);
 		if (peekQueue.size() >= 2) {
-			// skip condition for new lines as statement terminators is an operator before or after the line break.
-			// in either case, remove the new line, we don't need it anymore.
-			// note: removing the new line here, under strict rules makes later parsing way easier
-			if (peekQueue.crbegin()->type == TokenType::TOperator && (peekQueue.crbegin() + 1)->token == "\n") {
-				peekQueue.erase(peekQueue.cend() - 2);
-			} else if ((peekQueue.crbegin() + 1)->type == TokenType::TOperator && peekQueue.crbegin()->token == "\n") {
+			// ignore multiple newlines
+			if ((peekQueue.crbegin() + 1)->token == "\n" && peekQueue.crbegin()->token == "\n") {
 				peekQueue.erase(peekQueue.cend() - 1);
 			}
 		}
@@ -346,7 +343,6 @@ TokenStream::skipComment(bool blockComment)
 		});
 	} else {
 		readUntil([](char c) { return c == '\r' || c == '\n'; });
-		skipSpace();
 	}
 }
 

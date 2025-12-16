@@ -1,3 +1,7 @@
-alpha.beta["gamma"].delta;//(epsilon)
-1+2*3+5-~9;
-function(asd);
+alpha.beta["gamma"].delta //(epsilon)
+//asd
+
+
+1+2*3+5-~9+
+
+function(asd)

@@ -68,13 +68,13 @@ std::hash<ArgDef>::operator()(ArgDef const& s) const noexcept -> size_t
  * @param iterator - point at the current flag
  * @param boundary - arugments.cend()
  * @param offset - should be seperator offset withing *iterator for short flags
- * @param separatorOut - write back for index of separator, if found
+ *
  * @return the extracted string value for whatever flag we are; and the separator index into *iterator, if split with colon or equals, npos for space
  * @throws std::runtime_error if (*iterator)[offset{>0}]!=0 or iterator can not be advanced without hitting the boundary
  */
 auto
 popFlagValue(std::vector<std::string>::const_iterator& iterator, std::vector<std::string>::const_iterator const& boundary, size_t offset = 0)
-		-> std::pair<std::string, size_t>
+		-> std::tuple<std::string, size_t, bool>
 {
 	std::string const& arg = *iterator;
 	size_t separator       = std::string::npos;
@@ -97,13 +97,15 @@ popFlagValue(std::vector<std::string>::const_iterator& iterator, std::vector<std
 		throw std::runtime_error("Value flags need to be followed by a separator (colon, equals or space)");
 	}
 	if (separator != std::string::npos) {
-		return {arg.substr(separator), separator};
+		return {arg.substr(separator), separator, true};
 	} else {
 		++iterator;
-		if (iterator == boundary) {
-			throw std::runtime_error("Value flag at the end of the arugment list");
+		bool hasValue = iterator != boundary;
+		if (hasValue) {
+			return {*iterator, std::string::npos, hasValue};
+		} else {
+			return {std::string(), std::string::npos, hasValue};
 		}
-		return {*iterator, std::string::npos};
 	}
 }
 
@@ -216,6 +218,7 @@ Arguments::Arguments(int _argc, char** _argv, std::initializer_list<ArgDef> defs
 			auto flag = arg.substr(1);
 			auto def  = meta.cend();
 			if (flag[0] != '-') {
+				// short flag
 				char shortflag[3] = " ";
 				for (uint i = 0; flag[i]; i++) {
 					shortflag[0] = flag[i];
@@ -226,7 +229,10 @@ Arguments::Arguments(int _argc, char** _argv, std::initializer_list<ArgDef> defs
 						} else if (def->second.type == ArgType::NONE) {
 							this->options.try_emplace(def->second, 0).first->second++;
 						} else {
-							auto [value, _] = popFlagValue(it, args.cend(), i + 2);
+							auto [value, _, hasValue] = popFlagValue(it, args.cend(), i + 2);
+							if (!hasValue) {
+								throw std::runtime_error("Value flag at the end of the arugment list");
+							}
 							pushArg(def->second, value);
 							break;
 						}
@@ -235,15 +241,21 @@ Arguments::Arguments(int _argc, char** _argv, std::initializer_list<ArgDef> defs
 					}
 				}
 			} else {
-				auto [value, sep] = popFlagValue(it, args.cend());
-				auto def          = meta.find(toLowerCase(flag.substr(0, sep)));
+				// long flag
+				auto [value, sep, hasValue] = popFlagValue(it, args.cend());
+				auto def                    = meta.find(toLowerCase(flag.substr(0, sep)));
 				if (def != meta.cend()) {
-					if (def->second.kind != ArgKind::FLAG) {
+					if (hasValue != (def->second.type != ArgType::NONE)) {
+						throw std::runtime_error("Value flag at the end of the arugment list");
+					} else if (def->second.kind != ArgKind::FLAG) {
 						throw std::runtime_error(std::format("\"{}\" is not registered as flag!", flag));
 					} else if (def->second.type == ArgType::NONE) {
 						this->options.try_emplace(def->second, 0).first->second++;
 					} else {
 						pushArg(def->second, value);
+						break;
+					}
+					if (!hasValue) {
 						break;
 					}
 				} else {

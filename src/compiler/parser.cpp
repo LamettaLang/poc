@@ -292,6 +292,34 @@ replaceTreeHead(ExpressionP& root, ExpressionP& head, ExpressionP newHead)
 	}
 }
 
+/**
+ * @return true on end of statement
+ */
+bool
+skipSpace(TokenStreamP stream, bool expectValue, TokenPredicate terminal, Token const& previousToken)
+{
+	if (stream->eof() || terminal(stream, 0) != TEST_NO_HIT) {
+		// we have a terminal -> try skipping
+		if (expectValue) {
+			throw file_error("Unextected end of input while parsing expression, value expected", stream->getPosition());
+		}
+		return true;  // we've seen a terminal
+	}
+	while ((previousToken.type == TokenType::TOperator && pNewLine(stream, 0) != TEST_NO_HIT) ||
+	       (!expectValue && TokenTest::sequence({pNewLine, TokenType::TOperator})->matches(stream))) {
+		// drop new line if:
+		// - preceeded by operator, expression has to coninue on next line
+		// - new line followed by operator
+		stream->drop(1);
+		if (stream->eof()) {
+			throw file_error("Unextected EOF while parsing expression", stream->getPosition());
+		} else if (terminal(stream, 0) != TEST_NO_HIT) {
+			throw file_error("Unexpected Terminal after operator", stream->getPosition());
+		}
+	}
+	return false;
+}
+
 auto
 parseExpr(TokenStreamP stream, TokenPredicate terminal = TokenTest::type(TokenType::TTerminal)) -> ExpressionP
 {
@@ -305,21 +333,8 @@ parseExpr(TokenStreamP stream, TokenPredicate terminal = TokenTest::type(TokenTy
 	Token token{};
 
 	while (true) {
-		if (stream->eof() || terminal(stream, 0) != TEST_NO_HIT) {
-			if (expectValue) {
-				throw file_error("Unextected end of input while parsing expression, value expected", stream->getPosition());
-			}
+		if (skipSpace(stream, expectValue, terminal, token)) {
 			break;
-		}
-		if ((token.type == TokenType::TOperator && pNewLine(stream, 0) != TEST_NO_HIT) ||
-		    (!expectValue && TokenTest::sequence({pNewLine, TokenType::TOperator})->matches(stream))) {
-			// drop new line if:
-			// - preceeded by operator, expression has to coninue on next line
-			// - new line followed by operator
-			stream->drop(1);
-			if (stream->eof()) {
-				throw file_error("Unextected EOF while parsing expression", stream->getPosition());
-			}
 		}
 
 		token = stream->pop();
@@ -362,7 +377,7 @@ parseExpr(TokenStreamP stream, TokenPredicate terminal = TokenTest::type(TokenTy
 					replaceTreeHead(root, head, functionCall);
 					// parse args
 					TokenPredicate pArgumentSeparator = [](TokenStreamP stream, size_t offset) {
-						return TokenTest::choice({TokenTest::operand(","), TokenTest::operand(")")})->test(stream, offset);
+						return TokenTest::choice({TokenTest::operand(","), TokenTest::token(TokenType::TParen, ")")})->test(stream, offset);
 					};
 					auto pokey = stream->peek();
 					if (pokey->type == TokenType::TParen && pokey->token == ")") {
@@ -370,7 +385,7 @@ parseExpr(TokenStreamP stream, TokenPredicate terminal = TokenTest::type(TokenTy
 					}
 					for (;;) {
 						if (stream->eof()) {
-							throw file_error("Unexpected EOF", stream->getPosition());
+							throw file_error("Unexpected end of input while parsing arguments", stream->getPosition());
 						}
 						functionCall->arguments.emplace_back(parseExpr(stream, pArgumentSeparator));
 						token = stream->pop();
@@ -378,6 +393,7 @@ parseExpr(TokenStreamP stream, TokenPredicate terminal = TokenTest::type(TokenTy
 							break;
 						}
 					}
+					expectValue = true;  // adjust expectation, because we just cosumed args as operator, but the restult is a value
 				} else if (token.token == "[") {
 					// subscript and range syntax
 					auto op      = std::make_shared<BinaryOp>(token);
@@ -442,6 +458,9 @@ parseToplevel(TokenStreamP stream) -> StatementP
 	while (TokenTest::type(TokenType::TTerminal)(stream, 0) != TEST_NO_HIT) {
 		stream->drop(1);
 	}
+	if (stream->eof()) {
+		return {};
+	}
 
 	if (TokenTest::keyword("def")(stream, 0) != TEST_NO_HIT) {
 		return parseDef(stream);
@@ -492,7 +511,9 @@ parse(std::string file) -> InternalRepresentation
 	InternalRepresentation ir{};
 	while (!stream->eof()) {
 		auto statement = parseToplevel(stream);
-		ir.statements.emplace_back(statement);
+		if (statement) {
+			ir.statements.emplace_back(statement);
+		}
 	}
 
 	return std::move(ir);
